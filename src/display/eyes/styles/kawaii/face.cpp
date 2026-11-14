@@ -20,9 +20,12 @@ constexpr float kMinEyeRadiusPx = 1.0f;  // smaller eyes are not drawn
 constexpr float kClosedHalfWidth = 0.9f;
 constexpr float kClosedSagPx = 2.2f;
 constexpr float kClosedHappyAbove = 0.5f;
-// Round eyes stay round down to this height; line shapes (> <, x, hearts)
-// break into dashes when squashed, so they switch to the lid line earlier.
-constexpr float kRoundClosedBelowPx = 1.4f;
+// Round eyes flatter than this (height ÷ width radius) draw the lid line: a
+// thinner ellipse reads as a bar, not a blink. Compared with the width, since
+// scripted blinks squash the pose height itself, not just the open amount.
+constexpr float kRoundClosedBelow = 0.22f;
+// Line shapes (> <, x, hearts) break into dashes when squashed, so they
+// switch to the lid line earlier, at this fraction of their open height.
 constexpr float kLineShapeClosedBelow = 0.4f;
 
 // Happy carve: an ellipse rising from below. Wide while subtle so the whole
@@ -35,19 +38,37 @@ constexpr float kCarveRise = 1.55f;  // at happy = 1 the carve top is this far u
 // Upper lid: how far `lid` = 1 lowers it from the top edge.
 constexpr float kLidTravel = 1.2f;
 
-// Sparkle highlights: offset from the eye center and radius (× the smaller
-// eye radius). Same light for both eyes.
-struct Sparkle {
+// Pupil: a big dark disc that follows the gaze. Its size never changes with
+// lids, smiles or blinks: they cover it instead, the way eyelids do, and a
+// rim of eye always stays white around it so the outline never notches.
+constexpr int kPupilRimPx = 2;
+// How far the pupil may tuck under the rim when looking hard to a side, so a
+// big pupil still moves visibly; the rim covers the tucked part.
+constexpr float kPupilTuckPx = 1.0f;
+constexpr float kMinPupilRadiusPx = 1.6f;
+// Catch-lights: white spots inside the pupil, the same in both eyes (one big
+// round light up and left, two small dots). White on black, so they never
+// read as a second pupil. Offsets and radii are × the pupil radius.
+struct Light {
   float dx;
   float dy;
   float radius;
 };
-constexpr Sparkle kBigSparkle = {-0.36f, -0.36f, 0.3f};
-constexpr Sparkle kSmallSparkle = {0.42f, 0.4f, 0.17f};
-constexpr Sparkle kHeartSparkle = {-0.45f, -0.42f, 0.18f};
-constexpr float kSparkleMinEyeHeightPx = 5.0f;  // shorter eyes have no room
-constexpr float kSparkleMinStrength = 0.05f;
-constexpr float kSparkleLidClearancePx = 1.5f;  // keeps a lowered lid from notching it
+// Every light keeps at least 1.5 px of dark pupil around it, so the pupil
+// still reads as one dark disc.
+constexpr Light kCatchLights[] = {
+  {-0.3f, -0.3f, 0.32f},
+  {0.45f, -0.35f, 0.14f},
+  {-0.45f, 0.42f, 0.14f},
+};
+constexpr float kMinCatchLightRadiusPx = 0.5f;
+// Heart eyes have no pupil, just a dark highlight hole: offset from the
+// center (× radii) and radius (× the smaller radius).
+constexpr float kHeartHoleDx = -0.45f;
+constexpr float kHeartHoleDy = -0.42f;
+constexpr float kHeartHoleRadius = 0.18f;
+constexpr float kHeartHoleMinEyeHeightPx = 5.0f;  // shorter hearts have no room
+constexpr float kMinSparkle = 0.05f;
 constexpr float kMinHoleRadiusPx = 1.1f;  // smaller reads as a stray pixel, not a sparkle
 
 // Line shapes: extent within the eye box and stroke half-width.
@@ -111,30 +132,72 @@ Span pixelSpan(float mid, float halfWidth) {
   return {(int)ceilf(mid - halfWidth - 0.5f), floorInt(mid + halfWidth - 0.5f)};
 }
 
-// Shapes are drawn twice: a Gap pass clears a one-pixel ring around them (so
-// blush underneath never touches an eye), then the Ink pass draws them.
-enum class Pass : uint8_t { Gap, Ink };
+// Moves `x`, a float-solved estimate, to the last pixel in [lo, hi] where
+// `keep` holds, for a test that is true up to a boundary and false after it.
+// Returns lo - 1 when none qualify. Checking the edge pixels with the exact
+// test keeps the result identical to testing every pixel.
+template <typename Keep>
+int lastKept(int x, int lo, int hi, Keep keep) {
+  x = x < lo - 1 ? lo - 1 : (x > hi ? hi : x);
+  while (x >= lo && !keep(x)) {
+    x--;
+  }
+  while (x < hi && keep(x + 1)) {
+    x++;
+  }
+  return x;
+}
+
+// Float pixel index clamped to [lo, hi] so the int conversion is defined.
+float clampIndex(float v, int lo, int hi) {
+  return fminf(fmaxf(v, (float)lo), (float)hi);
+}
+
+// The run of pixels in [lo, hi] near mid ± halfWidth for which `inside`
+// holds (true on one contiguous run). Empty (first > last) when none do.
+template <typename Inside>
+Span runAround(float mid, float halfWidth, int lo, int hi, Inside inside) {
+  const Span none = {hi + 1, hi};
+  const float before = clampIndex(mid - halfWidth - 0.5f, lo - 1, hi + 1);
+  const float end = clampIndex(mid + halfWidth - 0.5f, lo - 1, hi + 1);
+  const int first = lastKept(floorInt(before), lo, hi, [&](int x) { return !inside(x); }) + 1;
+  if (first > hi || !inside(first)) {
+    return none;
+  }
+  return {first, lastKept(floorInt(end), first, hi, inside)};
+}
+
+// Pixels of row y within r of (cx, cy); empty (first > last) when none.
+Span discRow(float cx, float cy, float r, int y) {
+  const float dy = center(y) - cy;
+  const float rest = r * r - dy * dy;
+  const int lo = floorInt(cx - r);
+  const int hi = floorInt(cx + r);
+  if (rest < 0.0f) {
+    return {hi + 1, hi};
+  }
+  const float r2 = r * r;
+  return runAround(cx, sqrtf(rest), lo, hi, [&](int x) {
+    const float dx = center(x) - cx;
+    return dx * dx + dy * dy <= r2;
+  });
+}
 
 class Canvas {
  public:
-  Canvas(uint8_t* bits, Pass pass) : bits_(bits), pass_(pass) {}
+  explicit Canvas(uint8_t* bits) : bits_(bits) {}
 
-  void plot(int x, int y) {
-    if (pass_ == Pass::Ink) {
-      set(x, y, true);
+  void plot(int x, int y) { set(x, y, true); }
+
+  // Lights x0..x1 on row y (nothing when x0 > x1).
+  void run(int x0, int x1, int y) {
+    if (y < 0 || y >= kHeight) {
       return;
     }
-    for (int dy = -1; dy <= 1; dy++) {
-      for (int dx = -1; dx <= 1; dx++) {
-        set(x + dx, y + dy, false);
-      }
-    }
-  }
-
-  // Holes only matter for ink: the gap ring is around the outline.
-  void erase(int x, int y) {
-    if (pass_ == Pass::Ink) {
-      set(x, y, false);
+    x0 = x0 < 0 ? 0 : x0;
+    x1 = x1 >= kWidth ? kWidth - 1 : x1;
+    for (int x = x0; x <= x1; x++) {
+      set(x, y, true);
     }
   }
 
@@ -149,19 +212,22 @@ class Canvas {
     }
   }
 
-  void clearDisc(float cx, float cy, float r) {
-    if (r < kMinHoleRadiusPx) {
-      return;
-    }
-
-    const float r2 = r * r;
+  // Lights (on) or clears every pixel whose center is within r of (cx, cy).
+  void disc(float cx, float cy, float r, bool on) {
     for (int y = floorInt(cy - r); y <= floorInt(cy + r); y++) {
-      for (int x = floorInt(cx - r); x <= floorInt(cx + r); x++) {
-        const float dx = center(x) - cx;
-        const float dy = center(y) - cy;
-        if (dx * dx + dy * dy <= r2) {
-          erase(x, y);
-        }
+      const Span span = discRow(cx, cy, r, y);
+      for (int x = span.first; x <= span.last; x++) {
+        set(x, y, on);
+      }
+    }
+  }
+
+  // Lights (on) or clears the pixels of row y whose bits are set, bit i
+  // being pixel x0 + i.
+  void bits(int x0, int y, uint64_t mask, bool on) {
+    for (int i = 0; mask != 0; i++, mask >>= 1) {
+      if (mask & 1u) {
+        set(x0 + i, y, on);
       }
     }
   }
@@ -195,7 +261,6 @@ class Canvas {
   }
 
   uint8_t* bits_;
-  Pass pass_;
 };
 
 // ---------------------------------------------------------------- eyes ---
@@ -226,6 +291,18 @@ class HappyCarve {
       ry_(ry * kCarveHeight),
       cy_(e.cy + ry - happy * kCarveRise * ry + ry_) {}
 
+  // Pixels of `row` carved out at height py; empty (first > last) if none.
+  Span carved(const Span& row, float cx, float py) const {
+    const float w = halfWidthAt(py);
+    if (w <= 0.0f) {
+      return {row.last + 1, row.last};
+    }
+    return runAround(cx, w, row.first, row.last, [&](int x) { return fabsf(center(x) - cx) < w; });
+  }
+
+  // Highest point of the carve; below the eye when there is none.
+  float top(float eyeBottom) const { return active_ ? cy_ - ry_ : eyeBottom; }
+
   // Half-width carved out of row `py`; negative when the row misses it.
   float halfWidthAt(float py) const {
     if (!active_) {
@@ -253,37 +330,184 @@ class LidCut {
   float edgeAt(float px) const { return base_ + slope_ * (px - cx_); }
   bool hides(float px, float py) const { return py < edgeAt(px); }
 
+  // Narrows `s` to the pixels of row py that are below the lid. False when
+  // the lid covers the whole row.
+  bool trim(Span& s, float py) const {
+    const auto hidden = [&](int x) { return hides(center(x), py); };
+    if (slope_ == 0.0f) {
+      return !hidden(s.first);
+    }
+
+    // Pixel index where the lid line crosses this row.
+    const float cross = clampIndex(cx_ + (py - base_) / slope_ - 0.5f, s.first - 1, s.last + 1);
+    if (slope_ > 0.0f) {
+      // Lid lower toward +x: visible on the left.
+      s.last = lastKept(floorInt(cross), s.first, s.last, [&](int x) { return !hidden(x); });
+    } else {
+      s.first = lastKept((int)ceilf(cross) - 1, s.first, s.last, hidden) + 1;
+    }
+    return s.first <= s.last;
+  }
+
  private:
   float cx_;
   float base_;
   float slope_;
 };
 
-void drawSparkles(Canvas& c, const EyeShape& e, float ry, float happy, const LidCut& lid) {
-  // Fade as the eye squints so a thin crescent is never punched through.
-  const float strength = e.sparkle * (1.0f - happy) * (1.0f - clamp01(e.lid));
-  if (ry < kSparkleMinEyeHeightPx || strength <= kSparkleMinStrength) {
+// Gaze inside the unit circle, so diagonal looks travel no further.
+void unitGaze(const EyeShape& e, float& gx, float& gy) {
+  gx = e.gazeX;
+  gy = e.gazeY;
+  const float len2 = gx * gx + gy * gy;
+  if (len2 > 1.0f) {
+    const float len = sqrtf(len2);
+    gx /= len;
+    gy /= len;
+  }
+}
+
+// One bit per pixel of a round eye, a row per screen line, so the pupil can
+// be clipped to the eye and kept off its edges with cheap bit operations.
+class EyeMask {
+ public:
+  explicit EyeMask(int x0) : x0_(x0) {}
+
+  int x0() const { return x0_; }
+  uint64_t row(int y) const { return y >= 0 && y < kHeight ? rows_[y] : 0; }
+
+  // Bits for pixels a..b (clipped to the mask's 64 columns).
+  uint64_t span(int a, int b) const {
+    a = a < x0_ ? x0_ : a;
+    b = b > x0_ + 63 ? x0_ + 63 : b;
+    if (a > b) {
+      return 0;
+    }
+    const int n = b - a + 1;
+    const uint64_t ones = n >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << n) - 1);
+    return ones << (a - x0_);
+  }
+
+  void add(int a, int b, int y) {
+    if (y >= 0 && y < kHeight) {
+      rows_[y] |= span(a, b);
+    }
+  }
+
+  // Drops every pixel that touches the outside (4-neighbours), `times` over.
+  void erode(int times) {
+    for (int t = 0; t < times; t++) {
+      uint64_t prev = 0;
+      for (int y = 0; y < kHeight; y++) {
+        const uint64_t cur = rows_[y];
+        const uint64_t next = y + 1 < kHeight ? rows_[y + 1] : 0;
+        rows_[y] = cur & (cur << 1) & (cur >> 1) & prev & next;
+        prev = cur;
+      }
+    }
+  }
+
+ private:
+  int x0_;
+  uint64_t rows_[kHeight] = {};
+};
+
+// A disc centered on a pixel: every pixel (dx, dy) whole pixels from the
+// center with dx² + dy² ≤ r². Its shape depends only on r, so each row's
+// half-width is worked out once and the disc never changes shape as it moves.
+class PixelDisc {
+ public:
+  explicit PixelDisc(float r) : rows_(r < kMaxRows ? (int)r : kMaxRows) {
+    const float r2 = r * r;
+    for (int dy = 0; dy <= rows_; dy++) {
+      const float rest = r2 - (float)(dy * dy);
+      int w = (int)sqrtf(rest);
+      // sqrtf may round across a whole number: settle on the exact edge.
+      while ((float)((w + 1) * (w + 1)) <= rest) {
+        w++;
+      }
+      while (w >= 0 && (float)(w * w) > rest) {
+        w--;
+      }
+      half_[dy] = w;
+    }
+  }
+
+  int rows() const { return rows_; }
+  // Half-width of row dy (|dy| ≤ rows()); -1 when the row is empty.
+  int halfWidth(int dy) const { return half_[dy < 0 ? -dy : dy]; }
+
+ private:
+  static constexpr int kMaxRows = 15;
+  int rows_;
+  int half_[kMaxRows + 1] = {};
+};
+
+// Lights (on) or clears the pixels of a disc centered on pixel (cx, cy) that
+// are set in `allowed` (a row per screen line, bit i = pixel x0 + i).
+// Records what it drew in `drawn` when given.
+void maskedDisc(
+  Canvas& c, int x0, const uint64_t* allowed, int cx, int cy, const PixelDisc& disc, bool on,
+  uint64_t* drawn
+) {
+  const EyeMask cols(x0);
+  for (int dy = -disc.rows(); dy <= disc.rows(); dy++) {
+    const int y = cy + dy;
+    const int w = disc.halfWidth(dy);
+    if (y < 0 || y >= kHeight || w < 0) {
+      continue;
+    }
+    const uint64_t bits = cols.span(cx - w, cx + w) & allowed[y];
+    c.bits(x0, y, bits, on);
+    if (drawn != nullptr) {
+      drawn[y] |= bits;
+    }
+  }
+}
+
+void drawPupil(Canvas& c, const EyeShape& e, EyeMask& eye) {
+  const float r = fminf(e.pupil, e.rx - kPupilRimPx - 1.0f);
+  if (r < kMinPupilRadiusPx) {
     return;
   }
 
-  const float fit = fminf(e.rx, ry);
-  const float bigR = strength * kBigSparkle.radius * fit;
-  const float bigX = e.cx + kBigSparkle.dx * e.rx;
-  const float lowestTop = lid.edgeAt(bigX) + kSparkleLidClearancePx;
-  const float bigY = fmaxf(e.cy + kBigSparkle.dy * ry, lowestTop + bigR);
-  c.clearDisc(bigX, bigY, bigR);
-  c.clearDisc(
-    e.cx + kSmallSparkle.dx * e.rx,
-    e.cy + kSmallSparkle.dy * ry,
-    strength * kSmallSparkle.radius * fit
-  );
+  float gx = 0.0f;
+  float gy = 0.0f;
+  unitGaze(e, gx, gy);
+  // Travel is the same on both axes, so looking down under a squint or a
+  // smile moves the pupil as far as anywhere else; the lid just covers it.
+  // Centers snap to whole pixels, so the pupil moves without changing shape.
+  const float travel = fmaxf(0.0f, e.rx - r - kPupilRimPx + kPupilTuckPx);
+  const int px = floorInt(e.cx + gx * travel + e.pupilShake);
+  const int py = floorInt(e.cy + gy * travel);
+
+  // The pupil may only darken eye pixels at least the rim away from its edge.
+  eye.erode(kPupilRimPx);
+  uint64_t allowed[kHeight];
+  for (int y = 0; y < kHeight; y++) {
+    allowed[y] = eye.row(y);
+  }
+  uint64_t pupil[kHeight] = {};
+  maskedDisc(c, eye.x0(), allowed, px, py, PixelDisc(r), false, pupil);
+
+  for (const Light& light : kCatchLights) {
+    const float lr = e.sparkle * light.radius * r;
+    if (lr >= kMinCatchLightRadiusPx) {
+      const int lx = px + (int)roundf(light.dx * r);
+      const int ly = py + (int)roundf(light.dy * r);
+      maskedDisc(c, eye.x0(), pupil, lx, ly, PixelDisc(lr), true, nullptr);
+    }
+  }
 }
 
 void drawRoundEye(Canvas& c, const EyeShape& e, float ry) {
   const float happy = clamp01(e.happy);
   const HappyCarve carve(e, ry, happy);
   const LidCut lid(e, ry);
+  EyeMask mask(floorInt(e.cx - e.rx) - 1);
 
+  // Per row: the ellipse span, trimmed by the lid, minus the carve. Only
+  // the edges are tested in float; the runs between them are plain writes.
   for (int y = floorInt(e.cy - ry); y <= floorInt(e.cy + ry); y++) {
     const float py = center(y);
     const float t = (py - e.cy) / ry;
@@ -291,35 +515,40 @@ void drawRoundEye(Canvas& c, const EyeShape& e, float ry) {
       continue;
     }
 
-    const Span span = pixelSpan(e.cx, e.rx * sqrtf(1.0f - t * t));
-    const float carveHalfW = carve.halfWidthAt(py);
-    for (int x = span.first; x <= span.last; x++) {
-      const float px = center(x);
-      if (fabsf(px - e.cx) >= carveHalfW && !lid.hides(px, py)) {
-        c.plot(x, y);
-      }
+    Span row = pixelSpan(e.cx, e.rx * sqrtf(1.0f - t * t));
+    if (row.first > row.last || !lid.trim(row, py)) {
+      continue;
     }
+    const Span hole = carve.carved(row, e.cx, py);
+    c.run(row.first, hole.first - 1, y);
+    c.run(hole.last + 1, row.last, y);
+    mask.add(row.first, hole.first - 1, y);
+    mask.add(hole.last + 1, row.last, y);
   }
 
-  drawSparkles(c, e, ry, happy, lid);
+  drawPupil(c, e, mask);
+}
+
+// Lights the run of row y within halfStroke of x = mid.
+void stroke(Canvas& c, float mid, float halfStroke, int y) {
+  const int lo = floorInt(mid - halfStroke);
+  const Span run = runAround(mid, halfStroke, lo, floorInt(mid + halfStroke), [&](int x) {
+    return fabsf(center(x) - mid) <= halfStroke;
+  });
+  c.run(run.first, run.last, y);
 }
 
 // ">" for the screen-left eye, "<" for the right: points at the nose.
 void drawChevron(Canvas& c, const EyeShape& e, float ry) {
   const float h = ry * kChevronHeight;
   const float w = e.rx * kChevronWidth;
+  const int top = floorInt(e.cy - h);
+  const int bottom = floorInt(e.cy + h);
 
-  for (int y = floorInt(e.cy - h); y <= floorInt(e.cy + h); y++) {
+  for (int y = top; y <= bottom; y++) {
     const float a = fabsf(center(y) - e.cy) / h;
-    if (a > 1.0f) {
-      continue;
-    }
-
-    const float xc = e.cx + e.side * (w * 0.5f - w * a);
-    for (int x = floorInt(xc - kChevronHalfStrokePx); x <= floorInt(xc + kChevronHalfStrokePx); x++) {
-      if (fabsf(center(x) - xc) <= kChevronHalfStrokePx) {
-        c.plot(x, y);
-      }
+    if (a <= 1.0f) {
+      stroke(c, e.cx + e.side * (w * 0.5f - w * a), kChevronHalfStrokePx, y);
     }
   }
 }
@@ -327,51 +556,56 @@ void drawChevron(Canvas& c, const EyeShape& e, float ry) {
 void drawCross(Canvas& c, const EyeShape& e, float ry) {
   const float h = ry * kCrossHeight;
   const float w = e.rx * kCrossWidth;
-  const float reach = w + kCrossHalfStrokePx + 1.0f;
+  const int top = floorInt(e.cy - h);
+  const int bottom = floorInt(e.cy + h);
 
-  for (int y = floorInt(e.cy - h); y <= floorInt(e.cy + h); y++) {
+  for (int y = top; y <= bottom; y++) {
     const float d = (center(y) - e.cy) / h;
-    if (fabsf(d) > 1.0f) {
-      continue;
-    }
-
-    // The two strokes cross at the center: one at +d·w, the other at -d·w.
-    const float xa = e.cx + d * w;
-    const float xb = e.cx - d * w;
-    for (int x = floorInt(e.cx - reach); x <= floorInt(e.cx + reach); x++) {
-      const float px = center(x);
-      if (fabsf(px - xa) <= kCrossHalfStrokePx || fabsf(px - xb) <= kCrossHalfStrokePx) {
-        c.plot(x, y);
-      }
+    if (fabsf(d) <= 1.0f) {
+      // The two strokes cross at the center: one at +d·w, the other at -d·w.
+      stroke(c, e.cx + d * w, kCrossHalfStrokePx, y);
+      stroke(c, e.cx - d * w, kCrossHalfStrokePx, y);
     }
   }
 }
 
-// Inside the unit heart (X² + Y² − 1)³ − X²Y³ ≤ 0.
-bool insideHeart(float X, float Y) {
-  const float a = X * X + Y * Y - 1.0f;
-  return a * a * a - X * X * Y * Y * Y <= 0.0f;
+constexpr int kMaxHeartCols = 64;  // wider than any eye the panel can show
+
+// Inside the unit heart (X² + Y² − 1)³ − X²Y³ ≤ 0, with X² precomputed.
+bool insideHeart(float X2, float Y) {
+  const float a = X2 + Y * Y - 1.0f;
+  return a * a * a - X2 * Y * Y * Y <= 0.0f;
 }
 
 void drawHeart(Canvas& c, const EyeShape& e, float ry) {
   const float sx = e.rx * kHeartScale;
   const float sy = ry * kHeartScale;
+  const int top = floorInt(e.cy - ry * kHeartScan);
+  const int bottom = floorInt(e.cy + ry * kHeartScan);
+  const int left = floorInt(e.cx - e.rx * kHeartScan);
+  const int cols = floorInt(e.cx + e.rx * kHeartScan) - left + 1;
+  if (cols <= 0 || cols > kMaxHeartCols) {
+    return;
+  }
 
-  for (int y = floorInt(e.cy - ry * kHeartScan); y <= floorInt(e.cy + ry * kHeartScan); y++) {
+  float X2[kMaxHeartCols];
+  for (int k = 0; k < cols; k++) {
+    const float X = (center(left + k) - e.cx) / sx;
+    X2[k] = X * X;
+  }
+
+  for (int y = top; y <= bottom; y++) {
     const float Y = (e.cy - center(y)) / sy + kHeartLift;
-    for (int x = floorInt(e.cx - e.rx * kHeartScan); x <= floorInt(e.cx + e.rx * kHeartScan); x++) {
-      if (insideHeart((center(x) - e.cx) / sx, Y)) {
-        c.plot(x, y);
+    for (int k = 0; k < cols; k++) {
+      if (insideHeart(X2[k], Y)) {
+        c.plot(left + k, y);
       }
     }
   }
 
-  if (ry >= kSparkleMinEyeHeightPx && e.sparkle > kSparkleMinStrength) {
-    c.clearDisc(
-      e.cx + kHeartSparkle.dx * e.rx,
-      e.cy + kHeartSparkle.dy * ry,
-      e.sparkle * kHeartSparkle.radius * fminf(e.rx, ry)
-    );
+  const float hole = e.sparkle * kHeartHoleRadius * fminf(e.rx, ry);
+  if (ry >= kHeartHoleMinEyeHeightPx && e.sparkle > kMinSparkle && hole >= kMinHoleRadiusPx) {
+    c.disc(e.cx + kHeartHoleDx * e.rx, e.cy + kHeartHoleDy * ry, hole, false);
   }
 }
 
@@ -382,7 +616,7 @@ void drawEye(Canvas& c, const EyeShape& e) {
 
   const float ry = e.ry * clamp01(e.open);
   const float closedBelow =
-    e.kind == EyeKind::Round ? kRoundClosedBelowPx : kLineShapeClosedBelow * e.ry;
+    e.kind == EyeKind::Round ? kRoundClosedBelow * e.rx : kLineShapeClosedBelow * e.ry;
   if (ry < closedBelow) {
     drawClosedEye(c, e);
     return;
@@ -406,24 +640,70 @@ void drawEye(Canvas& c, const EyeShape& e) {
 
 // --------------------------------------------------------------- blush ---
 
-// Placed from the open-eye geometry so it holds still through blinks.
-void drawBlush(Canvas& c, const EyeShape& e, float amount) {
+constexpr int kBlushMaxCols = (int)(2.0f * kBlushRxPx) + 2;
+constexpr int kBlushMaxRows = (int)(2.0f * kBlushRyPx) + 2;
+static_assert(kBlushMaxCols <= 16, "blush mask rows are 16 bits");
+
+bool nearLit(const uint8_t* frame, int x, int y) {
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if (pixelAt(frame, x + dx, y + dy)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// d2: squared distance from the blush center in radii (1 = rim).
+bool blushDot(int x, int y, float d2, float amount) {
+  if (d2 >= 1.0f) {
+    return false;
+  }
+  // Soft edge: density falls off toward the rim.
+  const float level = amount * clamp01((1.0f - d2) * kBlushEdgeSoftness);
+  return kBayer[y & 3][x & 3] < level * kBlushDitherScale;
+}
+
+// Under the outer corner, placed from the open-eye geometry so it holds still
+// through blinks. Every dot is decided against the finished eyes before any
+// is drawn, so the blush keeps a one-pixel gap from them without counting
+// its own dots.
+void drawBlush(Canvas& c, const uint8_t* frame, const EyeShape& e, float amount) {
   if (amount <= kMinBlush || e.rx < kMinEyeRadiusPx) {
     return;
   }
 
   const float bx = e.cx - e.side * (e.rx + kBlushOutsetPx);
   const float by = e.cy + kBlushDrop * e.rx;
+  const int x0 = floorInt(bx - kBlushRxPx);
+  const int y0 = floorInt(by - kBlushRyPx);
+  const int cols = floorInt(bx + kBlushRxPx) - x0 + 1;
+  const int rows = floorInt(by + kBlushRyPx) - y0 + 1;
 
-  for (int y = floorInt(by - kBlushRyPx); y <= floorInt(by + kBlushRyPx); y++) {
-    for (int x = floorInt(bx - kBlushRxPx); x <= floorInt(bx + kBlushRxPx); x++) {
-      const float nx = (center(x) - bx) / kBlushRxPx;
-      const float ny = (center(y) - by) / kBlushRyPx;
-      const float d2 = nx * nx + ny * ny;
-      // Soft edge: density falls off toward the rim.
-      const float level = amount * clamp01((1.0f - d2) * kBlushEdgeSoftness);
-      if (d2 < 1.0f && kBayer[y & 3][x & 3] < level * kBlushDitherScale) {
-        c.plot(x, y);
+  float nx2[kBlushMaxCols];
+  for (int k = 0; k < cols && k < kBlushMaxCols; k++) {
+    const float nx = (center(x0 + k) - bx) / kBlushRxPx;
+    nx2[k] = nx * nx;
+  }
+
+  uint16_t mask[kBlushMaxRows] = {};
+  for (int r = 0; r < rows && r < kBlushMaxRows; r++) {
+    const int y = y0 + r;
+    const float ny = (center(y) - by) / kBlushRyPx;
+    const float ny2 = ny * ny;
+    for (int k = 0; k < cols && k < kBlushMaxCols; k++) {
+      const int x = x0 + k;
+      if (blushDot(x, y, nx2[k] + ny2, amount) && !nearLit(frame, x, y)) {
+        mask[r] |= (uint16_t)(1u << k);
+      }
+    }
+  }
+
+  for (int r = 0; r < kBlushMaxRows; r++) {
+    for (int k = 0; k < kBlushMaxCols; k++) {
+      if (mask[r] & (1u << k)) {
+        c.plot(x0 + k, y0 + r);
       }
     }
   }
@@ -462,9 +742,8 @@ float lipAt(const Mouth& m, float u, float omega) {
   const float single = 1.0f - u * u;
   const float twinU = 2.0f * fabsf(u) - 1.0f;  // each half as its own -1..1
   const float twin = 1.0f - twinU * twinU;
-  return m.cy
-    + m.curve * ((1.0f - omega) * single + omega * twin)
-    + m.wave * sinf(u * kMouthWaveCycles * kPi);
+  const float lip = m.cy + m.curve * ((1.0f - omega) * single + omega * twin);
+  return m.wave == 0.0f ? lip : lip + m.wave * sinf(u * kMouthWaveCycles * kPi);
 }
 
 bool mouthEdges(const Mouth& m, MouthColumns& out) {
@@ -552,20 +831,20 @@ bool render(const Face& face, uint8_t* frame, size_t frameBytes) {
   }
 
   memset(frame, 0, kFrameBytes);
-  Canvas ink(frame, Pass::Ink);
-  Canvas gap(frame, Pass::Gap);
+  Canvas canvas(frame);
 
-  // Blush first; the eyes then clear a one-pixel ring before drawing on top.
-  drawBlush(ink, face.left, face.blush);
-  drawBlush(ink, face.right, face.blush);
-  drawEye(gap, face.left);
-  drawEye(gap, face.right);
-  drawEye(ink, face.left);
-  drawEye(ink, face.right);
+  drawEye(canvas, face.left);
+  drawEye(canvas, face.right);
+  drawBlush(canvas, frame, face.left, face.blush);
+  drawBlush(canvas, frame, face.right, face.blush);
 
-  drawMouth(ink, face.mouth);
-  drawGlint(ink, face.left, face.glint);
-  drawGlint(ink, face.right, face.glint);
+  drawMouth(canvas, face.mouth);
+  drawGlint(canvas, face.left, face.glint);
+  drawGlint(canvas, face.right, face.glint);
+  for (uint8_t i = 0; i < face.sparkCount && i < kMaxSparks; i++) {
+    const Spark& s = face.sparks[i];
+    canvas.star((float)s.x, (float)s.y, s.arm);
+  }
   return true;
 }
 

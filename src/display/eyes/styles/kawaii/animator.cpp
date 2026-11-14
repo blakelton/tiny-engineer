@@ -33,9 +33,15 @@ constexpr float kSparkleTau = 120.0f;
 constexpr float kGlintTau = 160.0f;
 constexpr float kBounceTau = 140.0f;
 constexpr float kBlushTau = 280.0f;
+constexpr float kGazeTau = 150.0f;  // pupils glide rather than jump
 
-void approach(float& current, float target, float dtMs, float tauMs) {
-  current += (target - current) * (1.0f - expf(-dtMs / tauMs));
+// Fraction of the remaining distance an exponential approach covers in dtMs.
+float easeWeight(float dtMs, float tauMs) {
+  return 1.0f - expf(-dtMs / tauMs);
+}
+
+void approach(float& current, float target, float weight) {
+  current += (target - current) * weight;
 }
 
 // Semi-implicit Euler in small substeps.
@@ -93,6 +99,22 @@ void Animator::advanceKindSwap(EyeKind target, float dtMs) {
   }
 }
 
+// expf is a slow library call on the C3 (no FPU), and the frame time is
+// almost always the same 33 ms: recompute the weights only when it changes.
+const Animator::EaseWeights& Animator::weightsFor(float dt) {
+  if (dt != weights_.dtMs) {
+    weights_.dtMs = dt;
+    weights_.mouth = easeWeight(dt, kMouthTau);
+    weights_.lid = easeWeight(dt, kLidTau);
+    weights_.sparkle = easeWeight(dt, kSparkleTau);
+    weights_.glint = easeWeight(dt, kGlintTau);
+    weights_.bounce = easeWeight(dt, kBounceTau);
+    weights_.blush = easeWeight(dt, kBlushTau);
+    weights_.gaze = easeWeight(dt, kGazeTau);
+  }
+  return weights_;
+}
+
 void Animator::easeValues(const Expression& t, float dt) {
   Expression& c = current_;
 
@@ -101,19 +123,28 @@ void Animator::easeValues(const Expression& t, float dt) {
   spring(c.happyRight, happyRightVel_, t.happyRight, dt, kHappySpring);
   spring(c.mouthOpenDown, openDownVel_, t.mouthOpenDown, dt, kOpenDownSpring);
 
-  approach(c.lid, t.lid, dt, kLidTau);
-  approach(c.tilt, t.tilt, dt, kLidTau);
-  approach(c.sparkle, t.sparkle, dt, kSparkleTau);
-  approach(c.blush, t.blush, dt, kBlushTau);
-  approach(c.glint, t.glint, dt, kGlintTau);
-  approach(c.bounce, t.bounce, dt, kBounceTau);
-  approach(c.mouthWidth, t.mouthWidth, dt, kMouthTau);
-  approach(c.mouthCurve, t.mouthCurve, dt, kMouthTau);
-  approach(c.mouthOmega, t.mouthOmega, dt, kMouthTau);
-  approach(c.mouthOpenUp, t.mouthOpenUp, dt, kMouthTau);
-  approach(c.mouthWave, t.mouthWave, dt, kMouthTau);
-  approach(c.mouthShift, t.mouthShift, dt, kMouthTau);
-  approach(c.mouthHollow, t.mouthHollow, dt, kMouthTau);
+  const EaseWeights& w = weightsFor(dt);
+  approach(c.lid, t.lid, w.lid);
+  approach(c.tilt, t.tilt, w.lid);
+  approach(c.sparkle, t.sparkle, w.sparkle);
+  approach(c.pupil, t.pupil, w.sparkle);
+  approach(c.gazeX, t.gazeX, w.gaze);
+  approach(c.gazeY, t.gazeY, w.gaze);
+  approach(c.followGlance, t.followGlance, w.gaze);
+  approach(c.blush, t.blush, w.blush);
+  approach(c.glint, t.glint, w.glint);
+  approach(c.bounce, t.bounce, w.bounce);
+  approach(c.rise, t.rise, w.lid);
+  c.quiver = t.quiver;  // follows the bell's loudness frame by frame
+  c.quiverHz = t.quiverHz;
+  quiverPhase_ = fmodf(quiverPhase_ + kTwoPi * t.quiverHz * dt * kSecondsPerMs, kTwoPi);
+  approach(c.mouthWidth, t.mouthWidth, w.mouth);
+  approach(c.mouthCurve, t.mouthCurve, w.mouth);
+  approach(c.mouthOmega, t.mouthOmega, w.mouth);
+  approach(c.mouthOpenUp, t.mouthOpenUp, w.mouth);
+  approach(c.mouthWave, t.mouthWave, w.mouth);
+  approach(c.mouthShift, t.mouthShift, w.mouth);
+  approach(c.mouthHollow, t.mouthHollow, w.mouth);
 }
 
 }  // namespace kawaii

@@ -9,8 +9,6 @@ namespace kawaii {
 namespace {
 
 constexpr uint32_t kHopPeriodMs = 360;
-constexpr uint32_t kTwinklePeriodMs = 480;
-constexpr float kTwinkleDepth = 0.2f;  // sparkle size swing at full glint
 constexpr uint32_t kGlintPeriodMs = 560;
 constexpr float kGlintBase = 1.6f;   // star size at full glint, mid-swing
 constexpr float kGlintSwing = 1.4f;
@@ -32,7 +30,7 @@ EyeShape eyeFrom(
   const Expression& e,
   float happy,
   float open,
-  float sparkle
+  const Pose& look
 ) {
   EyeShape eye = {};
   eye.kind = e.kind;
@@ -45,7 +43,11 @@ EyeShape eyeFrom(
   eye.happy = happy;
   eye.lid = e.lid;
   eye.tilt = e.tilt;
-  eye.sparkle = sparkle;
+  // From the base radius, not the springy eye scale, so it never pulses.
+  eye.pupil = kPupilRadius * kEyeRadius * e.pupil;
+  eye.gazeX = look.gazeX + e.gazeX;
+  eye.gazeY = look.gazeY + e.gazeY;
+  eye.sparkle = e.sparkle;
   return eye;
 }
 
@@ -70,14 +72,17 @@ void composeFace(const Pose& pose, const Animator& animator, uint32_t now, Face&
 
   // Hop: bounces off the floor rather than swinging through it.
   const float hop = -fabsf(wave(now, kHopPeriodMs)) * e.bounce;
-  const float twinkle = 1.0f + kTwinkleDepth * e.glint * wave(now, kTwinklePeriodMs);
   const float open = pose.open * animator.kindOpen();
 
-  const EyePose left = withHop(pose.left, hop);
-  const EyePose right = withHop(pose.right, hop);
+  EyePose left = withHop(pose.left, hop - e.rise);
+  EyePose right = withHop(pose.right, hop - e.rise);
 
-  out.left = eyeFrom(left, 1, e, e.happyLeft, open, e.sparkle * twinkle);
-  out.right = eyeFrom(right, -1, e, e.happyRight, open, e.sparkle * twinkle);
+  out.left = eyeFrom(left, 1, e, e.happyLeft, open, pose);
+  out.right = eyeFrom(right, -1, e, e.happyRight, open, pose);
+  // Only the pupils shake; the eyes hold still around them.
+  const float shake = e.quiver * sinf(animator.quiverPhase());
+  out.left.pupilShake = shake;
+  out.right.pupilShake = shake;
   out.mouth = mouthFrom(left, right, e);
   out.blush = e.blush;
   out.glint = e.glint * (kGlintBase + kGlintSwing * wave(now, kGlintPeriodMs));

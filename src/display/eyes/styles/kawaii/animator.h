@@ -19,12 +19,28 @@ class Animator {
   const Expression& current() const { return current_; }
   // 0..1 extra eye openness for the blink that hides a kind swap.
   float kindOpen() const { return kindOpen_; }
+  // Where the shiver is in its cycle, radians. It advances at the target's
+  // quiverHz, so the shiver can speed up or slow down without a jump.
+  float quiverPhase() const { return quiverPhase_; }
 
  private:
   enum class KindPhase : uint8_t { None, Closing, Opening };
 
+  // Per-group easing weights (1 - e^(-dt/tau)) for the last frame time.
+  struct EaseWeights {
+    float dtMs = -1.0f;  // none computed yet
+    float mouth = 0.0f;
+    float lid = 0.0f;
+    float sparkle = 0.0f;
+    float glint = 0.0f;
+    float bounce = 0.0f;
+    float blush = 0.0f;
+    float gaze = 0.0f;
+  };
+
   void advanceKindSwap(EyeKind target, float dtMs);
   void easeValues(const Expression& target, float dtMs);
+  const EaseWeights& weightsFor(float dtMs);
 
   Expression current_ = {};
   float scaleVel_ = 0.0f;
@@ -33,6 +49,8 @@ class Animator {
   float openDownVel_ = 0.0f;
   KindPhase kindPhase_ = KindPhase::None;
   float kindOpen_ = 1.0f;
+  float quiverPhase_ = 0.0f;
+  EaseWeights weights_;
 };
 
 }  // namespace kawaii
