@@ -196,7 +196,7 @@ curl http://tiny-engineer.local/settings
 | `push_button_pin` | GPIO on the Extension port for the push-button: **6**, **7**, **20**, or **21** (default **20**). Persists when `push_button` is off. Applies **immediately** when the extension is on |
 | `continuous_timeout` | Minutes a continuous animation (`typing` / `reading` / `thinking` / `talking`) may run before the firmware switches to `attention` then idle (default **5**) |
 | `loading` | Boot loading screen: `progress` (bar + large IP for 3 s) or `sleep_inertia` (eyes wake; no bar/IP). Default **`progress`**. Applies on **next reboot** |
-| `eyes_style` | OLED eyes look: `classic` (procedural rounded eyes), `kaomoji` (animated faces), `cover` (full-half bars for an eye-hole mask), `dots` (12×12 circles), or `kawaii` (round eyes with big moving pupils, a talking mouth, and blush). Default **`classic`**. Applies **immediately**. Classic, cover, and dots sequences are described under [`POST /anim`](#post-anim); kaomoji face mapping is under [Kaomoji eyes](#kaomoji-eyes); cover drawing is under [Cover eyes](#cover-eyes); dots drawing is under [Dots eyes](#dots-eyes); kawaii moods are under [Kawaii eyes](#kawaii-eyes) |
+| `eyes_style` | OLED eyes look: `classic` (procedural rounded eyes), `kaomoji` (animated faces), `cover` (full-half bars for an eye-hole mask), `dots` (12×12 circles), or `kawaii` (round eyes with big moving pupils, a talking mouth, and blush), or `anime` (expressive anime eyes with brows, teeth, and manga symbols). Default **`classic`**. Applies **immediately**. Classic, cover, and dots sequences are described under [`POST /anim`](#post-anim); kaomoji face mapping is under [Kaomoji eyes](#kaomoji-eyes); cover drawing is under [Cover eyes](#cover-eyes); dots drawing is under [Dots eyes](#dots-eyes); kawaii moods are under [Kawaii eyes](#kawaii-eyes); anime is under [Anime eyes](#anime-eyes) |
 | `access_token_set` | `true` when a non-empty access token is stored (secret itself is never returned) |
 | `link_mode` | `""` unprovisioned, `"wifi"`, or `"usb"` (connection mode; see [`serial.md`](serial.md)) |
 | `wifi_configured` | `true` when at least one WiFi network is saved |
@@ -259,7 +259,7 @@ curl -X POST "http://192.168.4.1/settings" \
 | `push_button_pin` | integer | Extension-port GPIO **6**, **7**, **20**, or **21** (default **20**); persists when off |
 | `continuous_timeout` | integer | 1–1440 minutes (positive) |
 | `loading` | string | `progress` or `sleep_inertia` |
-| `eyes_style` | string | `classic`, `kaomoji`, `cover`, `dots`, or `kawaii` |
+| `eyes_style` | string | `classic`, `kaomoji`, `cover`, `dots`, `kawaii`, or `anime` |
 | `access_token` | string | 0–64 printable ASCII, no space at either end; empty string clears the token and disables auth. Setting or rotating a non-empty value disconnects WebSocket `/events` subscribers (they must reconnect with the new token); clearing does not |
 | `link_mode` | string | `wifi` or `usb`; setup Connection step uses `usb` for USB-only; Wi-Fi mode is usually set when saving networks via [`PUT /settings/wifi`](#put-settingswifi) |
 | `servo_mins` | integer array | Five integers `0`–`180` (`head, neck, left, right, body`); setup AP only; must be sent with `servo_maxs` |
@@ -623,7 +623,7 @@ curl -X POST "http://tiny-engineer.local/anim?name=none"
 { "ok": true, "animation": "typing" }
 ```
 
-Eye detail below for `eyes_style=classic` (default). With `eyes_style=cover`, the same sequences drive full-half bars ([Cover eyes](#cover-eyes)). With `eyes_style=dots`, the same sequences drive 12×12 circles ([Dots eyes](#dots-eyes)). With `eyes_style=kawaii`, the same sequences move and blink a kawaii face whose expression follows the animation and whose mouth says the voice clips ([Kawaii eyes](#kawaii-eyes)). With `eyes_style=kaomoji`, faces follow [Kaomoji eyes](#kaomoji-eyes) instead of procedural blinks, glances, flicker, or X eyes. Servo/audio behavior is the same for every style.
+Eye detail below for `eyes_style=classic` (default). With `eyes_style=cover`, the same sequences drive full-half bars ([Cover eyes](#cover-eyes)). With `eyes_style=dots`, the same sequences drive 12×12 circles ([Dots eyes](#dots-eyes)). With `eyes_style=kawaii`, the same sequences move and blink a kawaii face whose expression follows the animation and whose mouth says the voice clips ([Kawaii eyes](#kawaii-eyes)). With `eyes_style=anime`, the same face engine draws anime eyes instead ([Anime eyes](#anime-eyes)). With `eyes_style=kaomoji`, faces follow [Kaomoji eyes](#kaomoji-eyes) instead of procedural blinks, glances, flicker, or X eyes. Servo/audio behavior is the same for every style.
 
 Durations and quoted lines below are the stock clips in [`assets/`](../assets/). A filesystem built with `custom_audio_mod` can replace some of those WAVs. Phrase timing then follows that clip's `.cue` file on LittleFS (`/welcome.cue` and the same pattern for `attention`, `error`, `abort`, and `dead`). See [flash.md](flash.md).
 
@@ -690,6 +690,23 @@ While `welcome`, `attention`, `error`, `abort`, or `dead` plays its stock clip, 
 | `talking` | The mouth talks in syllables, shaped as `ah` (tall), `ee` (wide), or `o` (round). With `/play` audio it opens with the speech loudness and changes shape on each syllable onset. Without audio it babbles in short phrases with pauses |
 | `sleep` / sleep-close | Lids close, small `ω` |
 | `dead` | Sad (lids tilted down at the outer corners, frown), then `x x` eyes during the X hold. Says "Insufficient resources... shutting doooowwwnnn" |
+
+#### Anime eyes
+
+When `eyes_style=anime`, the face runs on the same engine as [kawaii](#kawaii-eyes): every animation picks the same mood, idle and the work modes get the same occasional accents, typing reads code, the mouth says the voice clips in sync, and the bell plays the same celebration. Only the look differs, and it is less cute and more expressive.
+
+Each eye is an almond about 24 px wide with a heavy upper lash line that flicks past the outer corner and a thin partial lower lid. The iris is screentoned (darker under the lid) with a solid pupil and a sharp highlight; lids and smiles cover it. Brows sit above each eye and carry most of the emotion. Manga marks appear when a mood calls for them.
+
+| Mood | Anime face |
+| --- | --- |
+| Smiles (idle) | Relaxed brows; closed `^` eyes for a grin; a fanged smirk with a wink |
+| Focused (`typing`), reading | Narrowed eyes; brows set low (focused) or level (reading) |
+| Thinking | One brow raised, eyes up, a wobbly mouth off to one side |
+| Curious (`attention`) | Eyes a little wider, one brow raised, a small `o` |
+| Angry (`error`) | Sharp upturned eyes, brows in a hard V, a fanged snarl, an anger vein |
+| Panic (`abort`) | Pinprick pupils, worried brows, a wobbling mouth, a sweat drop |
+| Sad (`dead`), dizzy | Worried brows, droopy glassy eyes, gloom lines; then spiral eyes |
+| Yell (the bell's ding) | `> <` eyes squeezed shut and a huge mouth with fangs |
 
 Wrong params return **400**:
 
