@@ -65,8 +65,8 @@ void applyVoice(Expression& target, const Voice& voice) {
   target.mouthHollow = open.hollow && level >= kHollowFromLevel ? 1.0f : 0.0f;
 }
 
-void speakingMouth(Expression& target) {
-  const Expression talk = expressionFor(Mood::Talking);
+void speakingMouth(Expression& target, Presets presets) {
+  const Expression talk = presets(Mood::Talking);
   target.mouthWidth = talk.mouthWidth;
   target.mouthCurve = talk.mouthCurve;
   target.mouthOmega = talk.mouthOmega;

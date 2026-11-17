@@ -86,6 +86,14 @@ Expression blend(const Expression& a, const Expression& b, float t) {
   e.mouthWave = lerp(a.mouthWave, b.mouthWave, t);
   e.mouthShift = lerp(a.mouthShift, b.mouthShift, t);
   e.mouthHollow = lerp(a.mouthHollow, b.mouthHollow, t);
+  e.browLift = lerp(a.browLift, b.browLift, t);
+  e.browTilt = lerp(a.browTilt, b.browTilt, t);
+  e.browAsym = lerp(a.browAsym, b.browAsym, t);
+  e.teeth = lerp(a.teeth, b.teeth, t);
+  e.fang = lerp(a.fang, b.fang, t);
+  e.vein = lerp(a.vein, b.vein, t);
+  e.sweat = lerp(a.sweat, b.sweat, t);
+  e.gloom = lerp(a.gloom, b.gloom, t);
   return e;
 }
 

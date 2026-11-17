@@ -196,7 +196,8 @@ float since(uint32_t now, uint32_t at) {
 
 }  // namespace
 
-void BellCelebration::reset(uint32_t now) {
+void BellCelebration::reset(uint32_t now, Presets presets) {
+  presets_ = presets;
   startedMs_ = now;
   rung_ = false;
 }
@@ -219,17 +220,17 @@ float BellCelebration::ring(uint32_t now) const {
 Expression BellCelebration::breath(uint32_t now) const {
   // Breathing in deeper and deeper; eases in so the last of it is the fullest.
   const float t = since(now, startedMs_) / (float)kBreathMs;
-  return blend(expressionFor(Mood::Curious), expressionFor(Mood::Suspense), smooth(t));
+  return blend(presets_(Mood::Curious), presets_(Mood::Suspense), smooth(t));
 }
 
 Expression BellCelebration::afterDing(uint32_t now) const {
   const float t = since(now, dingMs_);
-  Expression e = expressionFor(Mood::Yell);
+  Expression e = presets_(Mood::Yell);
   if (t >= (float)kYellMs) {
-    e = blend(e, expressionFor(Mood::Bliss), (t - kYellMs) / (float)kYellEaseMs);
+    e = blend(e, presets_(Mood::Bliss), (t - kYellMs) / (float)kYellEaseMs);
   }
   if (t >= (float)kRingEndMs) {
-    e = blend(e, expressionFor(Mood::Afterglow), smooth((t - kRingEndMs) / (float)kAfterglowMs));
+    e = blend(e, presets_(Mood::Afterglow), smooth((t - kRingEndMs) / (float)kAfterglowMs));
   }
 
   // The pupils shake with the bell: hardest on the strike, fading and

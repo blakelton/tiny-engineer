@@ -27,7 +27,7 @@ void applyVoice(Expression& target, const Voice& voice);
 
 // Gives any mood the talking resting mouth (a small parted smile), so
 // syllables read clearly; the rest of the mood is kept.
-void speakingMouth(Expression& target);
+void speakingMouth(Expression& target, Presets presets = expressionFor);
 
 class Babbler {
  public:

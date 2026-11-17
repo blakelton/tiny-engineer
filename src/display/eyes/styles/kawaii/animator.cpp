@@ -145,6 +145,14 @@ void Animator::easeValues(const Expression& t, float dt) {
   approach(c.mouthWave, t.mouthWave, w.mouth);
   approach(c.mouthShift, t.mouthShift, w.mouth);
   approach(c.mouthHollow, t.mouthHollow, w.mouth);
+  approach(c.browLift, t.browLift, w.lid);
+  approach(c.browTilt, t.browTilt, w.lid);
+  approach(c.browAsym, t.browAsym, w.lid);
+  approach(c.teeth, t.teeth, w.mouth);
+  approach(c.fang, t.fang, w.mouth);
+  approach(c.vein, t.vein, w.sparkle);
+  approach(c.sweat, t.sweat, w.sparkle);
+  approach(c.gloom, t.gloom, w.blush);
 }
 
 }  // namespace kawaii

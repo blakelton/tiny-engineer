@@ -55,8 +55,8 @@ class MoodDirector {
 // Without a bell clip, the ding comes after a wait and plays the same way.
 class BellCelebration {
  public:
-  // Call when the ring starts.
-  void reset(uint32_t now);
+  // Call when the ring starts; `presets` are the look's faces.
+  void reset(uint32_t now, Presets presets = expressionFor);
   // The face at `now`; `bellPlaying`: the bell clip is playing.
   Expression update(uint32_t now, bool bellPlaying);
 
@@ -69,6 +69,7 @@ class BellCelebration {
   Expression breath(uint32_t now) const;
   Expression afterDing(uint32_t now) const;
 
+  Presets presets_ = expressionFor;
   uint32_t startedMs_ = 0;
   bool rung_ = false;
   uint32_t dingMs_ = 0;

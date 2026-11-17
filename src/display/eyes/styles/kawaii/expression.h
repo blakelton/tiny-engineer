@@ -71,6 +71,15 @@ struct Expression {
   float rise;           // px the whole face lifts (a deep breath)
   float quiver;         // pupil shake, px each way (not eased: set per frame)
   float quiverHz;       // how fast the pupils shake (the phase carries on)
+  // Used by looks that draw them (anime); 0 elsewhere.
+  float browLift;       // -1 lowered .. 1 raised
+  float browTilt;       // + inner ends down (angry V), - inner ends up (worried)
+  float browAsym;       // + raises the screen-right brow, - the left (skeptical)
+  float teeth;          // 0..1 how much of the top teeth show in an open mouth
+  float fang;           // 0..1 fang size at the corners of the teeth
+  float vein;           // 0..1 anger vein mark
+  float sweat;          // 0..1 sweat drop
+  float gloom;          // 0..1 gloom lines above the eyes
   float mouthWidth;     // px
   float mouthCurve;     // px, see Mouth::curve
   float mouthOmega;     // 0..1, see Mouth::omega
@@ -84,6 +93,9 @@ struct Expression {
 // The preset for `mood`. The numbers in each preset are hand-tuned looks,
 // labelled by the mood they belong to.
 Expression expressionFor(Mood mood);
+
+// A look's mood presets (expressionFor is kawaii's).
+using Presets = Expression (*)(Mood mood);
 
 // a..b by t (0..1) on every eased value; the eye kind switches at the end.
 Expression blend(const Expression& a, const Expression& b, float t);

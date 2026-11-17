@@ -45,16 +45,21 @@ bool onScreen(float x, float y) {
   return x >= -1.0f && x <= kWidth && y >= -1.0f && y <= kHeight;
 }
 
-void add(Face& face, float x, float y, int8_t arm) {
-  if (face.sparkCount >= kMaxSparks || !onScreen(x, y)) {
+struct SparkList {
+  Spark* sparks;
+  uint8_t& count;
+};
+
+void add(SparkList& list, float x, float y, int8_t arm) {
+  if (list.count >= kMaxSparks || !onScreen(x, y)) {
     return;
   }
-  face.sparks[face.sparkCount++] = {(int16_t)floorf(x), (int16_t)floorf(y), arm};
+  list.sparks[list.count++] = {(int16_t)floorf(x), (int16_t)floorf(y), arm};
 }
 
 // One star and its trail. The trail steps back along the curl with a fixed
 // small rotation, so only the head needs sin and cos.
-void addStar(Face& face, const EyeShape& eye, const Launch& l, float t, float ring) {
+void addStar(SparkList& face, const SparkAnchor& eye, const Launch& l, float t, float ring) {
   const float side = -(float)eye.side;  // screen-left eye flies left
   const float ox = eye.cx + side * (eye.rx + kLaunchGapPx);
   const float oy = eye.cy + l.dy;
@@ -82,18 +87,28 @@ void addStar(Face& face, const EyeShape& eye, const Launch& l, float t, float ri
 
 }  // namespace
 
-void addStarBurst(Face& face, uint32_t sinceDingMs, float ring) {
+void addStarBurst(
+  Spark* sparks, uint8_t& count, const SparkAnchor& left, const SparkAnchor& right,
+  uint32_t sinceDingMs, float ring
+) {
   if (ring <= 0.0f) {
     return;
   }
+  SparkList list = {sparks, count};
   for (const Launch& l : kLaunches) {
     if (sinceDingMs < l.delayMs) {
       continue;
     }
     const float t = (float)(sinceDingMs - l.delayMs) / kMsPerS;
-    addStar(face, face.left, l, t, ring);
-    addStar(face, face.right, l, t, ring);
+    addStar(list, left, l, t, ring);
+    addStar(list, right, l, t, ring);
   }
+}
+
+void addStarBurst(Face& face, uint32_t sinceDingMs, float ring) {
+  const SparkAnchor left = {face.left.cx, face.left.cy, face.left.rx, face.left.side};
+  const SparkAnchor right = {face.right.cx, face.right.cy, face.right.rx, face.right.side};
+  addStarBurst(face.sparks, face.sparkCount, left, right, sinceDingMs, ring);
 }
 
 }  // namespace kawaii
